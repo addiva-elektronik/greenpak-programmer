@@ -41,6 +41,13 @@ Addiva Elektronik AB, Henrik Nordström, 2023
 #define NVM 0
 #define EEPROM 1
 
+
+typedef enum {
+	SLG46_RAM = 1,
+	SLG46_NVM = 2,
+	SLG46_EEPROM = 3,
+} block_address;
+
 /*
 
 https://www.dialog-semiconductor.com/sites/default/files/isp_guide_slg46824_26_rev.1.2.pdf
@@ -65,7 +72,7 @@ int i2c_init(int adapter_nr)
 // IN:
 // buf[256]
 // OUT: length of data read or -1: Error opening file
-int load_hex(char *filename, int i2c_file, unsigned char *buf)
+int load_hex(char *filename, int i2c_bus, unsigned char *buf)
 {
 	char line[256];
 	char tmp[5];
@@ -154,29 +161,30 @@ void powercycle()
 //	puts("Done Power Cycling!");
 }
 
-// reads either the device’s NVM data or EEPROM data using the specified device address
-int readChip(int i2c_file, unsigned short NVMorEEPROM)
+
+void select_block(int i2c_bus, uint8_t device_address, block_address block)
 {
-	uint8_t device_address = 0x08; // Base address 8
-	//int control_code = device_address << 3; // 0x08 << 3 = 0x40
+	if (device_address & 0x7)
+		err(EXIT_FAILURE, "Invalid device address %d (0x%02x)", device_address, device_address);
+
+	device_address |= block;
+
+	if (ioctl(i2c_bus, I2C_SLAVE_FORCE, device_address) < 0) // I2C_SLAVE. device_address / control_code
+		err(errno, "Couldn't set device address '0x%02x'", device_address);
+}
+
+// reads either the device’s NVM data or EEPROM data using the specified device address
+int readChip(int i2c_bus, uint8_t device_address, block_address block)
+{
 	int pagenr, byteidx, reg;
 	int value;
-	puts("readChip");
 
-	if (NVMorEEPROM == NVM)
-		device_address |= NVM_CONFIG; // 8 | 0b010 (2) = 0xa
-	else if (NVMorEEPROM == EEPROM)
-		device_address |= EEPROM_CONFIG; // 8 | 0b011 (3) = 0xb
-
-	if (ioctl(i2c_file, I2C_SLAVE_FORCE, device_address) < 0) // I2C_SLAVE. device_address / control_code
-		err(errno, "Couldn't set device address '0x%02x'", device_address);
-	printf("set address 0x%02x\n", device_address);
+	select_block(i2c_bus, device_address, block);
 
 	for (pagenr = 0; pagenr < 16; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
-		//if (read(i2c_file, buf, 16) != 16)
 		for (byteidx = 0; byteidx < 16; byteidx++) {
 			reg = pagenr << 4 | byteidx;
-			value = i2c_smbus_read_byte_data(i2c_file, reg);
+			value = i2c_smbus_read_byte_data(i2c_bus, reg);
 			if (value < 0) {
 				printf(" --");
 			} else
@@ -191,36 +199,33 @@ int readChip(int i2c_file, unsigned short NVMorEEPROM)
 
 // eraseChip - erases either the device’s NVM data or EEPROM data using the specified device address
 // Se s. 10
-int eraseChip(int i2c_file, unsigned short NVMorEEPROM)
+int eraseChip(int i2c_bus, uint8_t device_address, block_address block)
 {
-	uint8_t device_address = 0x08; // always 8 when erasing register data (A10..A8 = 000)
-	// Erased chip: base address 0 (0, 1, 2, 3)
-	// Empty or programmed chip: base address 8 (8, 9, a, b)
 
-	unsigned int pagenr;
-	unsigned int data;
+	select_block(i2c_bus, device_address, SLG46_RAM);
 
-	if (NVMorEEPROM != NVM && NVMorEEPROM != EEPROM)
-		return 0;
+	switch (block) {
+	case SLG46_NVM:
+		printf("Erase NVM page:");
+		break;
+	case SLG46_EEPROM:
+		printf("Erase EEPROM page:");
+		break;
+	default:
+		err(EXIT_FAILURE, "Invalid erase block %d", block);
+	}
 
-	if (ioctl(i2c_file, I2C_SLAVE_FORCE, device_address) < 0) // I2C_SLAVE
-		err(errno, "Couldn't set device address '0x%02x'", device_address);
-	printf("set address 0x%02x\nErasing ", device_address);
-		if (NVMorEEPROM == NVM) {
-			printf("NVM page:");
-		} else {
-			printf("EEPROM page:");
-		}
-
-	for (pagenr = 0; pagenr < 15; pagenr++) { // 0 .. 14 = cycle thru ERSEB0-3. NVM page 15 = reserved.
+	for (int pagenr = 0; pagenr < 15; pagenr++) { // 0 .. 14 = cycle thru ERSEB0-3. NVM page 15 = reserved.
 		printf(" %02X", pagenr);
 
-		if (NVMorEEPROM == NVM) {
-			data = 0x80 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 0 = NVM. Low nibble = page address
+		uint8_t page_erase_reg;
+
+		if (block == SLG46_NVM) {
+			page_erase_reg = 0x80 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 0 = NVM. Low nibble = page address
 		} else {
-			data = 0x90 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 1 = EEPROM. Low nibble = page address
+			page_erase_reg = 0x90 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 1 = EEPROM. Low nibble = page address
 		}
-		i2c_smbus_write_byte_data(i2c_file, 0xE3, data); // 0xE3 == ERSR register
+		i2c_smbus_write_byte_data(i2c_bus, 0xE3, page_erase_reg); // 0xE3 == Page Erase Register
 
 /* When writing to the “Page Erase Byte” (Address: 0xE3), the SLG46824/6 produces a non-I2C compliant
 ACK after the “Data” portion of the I2C command. This behavior might be interpreted as a NACK
@@ -233,18 +238,12 @@ in the SLG46824/6 (XC revision) errata document for more information. */
 	}
 	putchar('\n');
 
-	powercycle();
-	return 1;
+	return 0;
 }
 
-// 1: page erase E3 till adr 8
-// 2: skriv data till NVM area 8+2 = 0xa / 0+2 = 2
-
 // writeChip - Erases and then writes either the device’s NVM data or EEPROM data using the specified device address.
-int writeChip(int i2c_file, unsigned short NVMorEEPROM, char *filename)
+int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *filename)
 {
-	uint8_t device_address = 0; // 0x08; // Erased chip has base address 0
-	int addressForAckPolling = 0x00;
 	int pagenr;
 	int byteidx;
 	int reg;
@@ -252,24 +251,10 @@ int writeChip(int i2c_file, unsigned short NVMorEEPROM, char *filename)
 	int length;
 	unsigned char value;
 
-	puts("writeChip");
-	if (filename==NULL)
-		return 0;
+	if (!filename)
+		err(EXIT_FAILURE, "No filename given");
 
-	if (NVMorEEPROM == NVM) {
-		device_address |= NVM_CONFIG; // 010, se s. 12. Base address 8 => becomes 0x0a for writing
-		addressForAckPolling = 0x00;
-	} else if (NVMorEEPROM == EEPROM) { // 011, se s. 12
-		device_address |= EEPROM_CONFIG;
-		addressForAckPolling = device_address << 3;
-	} else
-		return 0;
-
-	if (ioctl(i2c_file, I2C_SLAVE_FORCE, device_address) < 0) // I2C_SLAVE
-		err(errno, "Couldn't set device address '0x%02x'", device_address);
-	printf("set address 0x%02x\n", device_address);
-
-	length = load_hex(filename, i2c_file, filebuf);
+	length = load_hex(filename, i2c_bus, filebuf);
 	if (length < 0) {
 		puts("Error: couldn't open hex file.");
 		return 0;
@@ -278,12 +263,13 @@ int writeChip(int i2c_file, unsigned short NVMorEEPROM, char *filename)
 		return 0;
 	}
 
-printf("Setting filebuf[0xCA] to new device address 1 (was in file: %02x)\n", filebuf[0xCA]);
-filebuf[0xCA] = 1;
+	if (block != SLG46_RAM)
+		eraseChip(i2c_bus, device_address, block);
+
+	select_block(i2c_bus, device_address, block);
 
 	for (pagenr = 0; pagenr < 15; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
 		printf("Page 0x%02X:", pagenr);
-
 
 		puts("Using write()");
 		for (byteidx = 0; byteidx < 16; byteidx++) {
@@ -291,101 +277,82 @@ filebuf[0xCA] = 1;
 			printf(" %02X", value);
 		}
 		putchar('\n');
-//		if (i2c_smbus_write_block_data(i2c_file, pagenr << 4, 16, &filebuf[pagenr]) < 0)
-		if (write(i2c_file, &(filebuf[pagenr << 4]), 16) != 16)
+		if (i2c_smbus_write_block_data(i2c_bus, pagenr << 4, 16, &filebuf[pagenr*16]) < 0)
 			err(errno, "I2C write failed");
 
 		delay(100);
 	}
-	powercycle();
 	return 1;
 
 }
 
+void usage(void) {
+	puts("GreenPak programmer - for programming NVM of SLG46824 or SLG46826\n" \
+	"Usage: greenpakprog [ADAPTER_NR 1..8] [DEVICE_ADDRESS] [OPTION] <filename.hex>\n" \
+	"Where OPTION is one of:\n" \
+	"r = read NVM\n" \
+	"e = erase NVM\n" \
+	"w = write <filename.hex> to NVRAM\n" \
+	"R = read EEPROM\n" \
+	"W = write <filename.hex> to EEPROM\n" \
+	"E = erase EEPROM\n" \
+	"x = read RAM\n" \
+	"X = write <filename.hex> to RAM\n" \
+	"Example: greenpakprog 3 8 r\n" \
+	"Example: greenpakprog 3 8 w SGL46826.hex\n");
+	exit(1);
+}
 
 int main(int argc, char ** argv)
 {
-	int i2c_file;
-	int adapter_nr = 0;
-
-	unsigned short NVMorEEPROM = NVM; // SLG46826 also has EEPROM, however we don't use it
-	bool printusage = 0;
+	int i2c_bus;
+	int adapter_nr;
+	int device_address;
 	char selection = ' ';
 	char * filename = NULL;
 
-	if (argc < 3) {
-		printusage = 1;
-	} else if (strlen(argv[2]) != 1) {
-		printusage = 1;
-	}
-	else
-		selection = tolower(argv[2][0]);
+	if (argc < 4)
+		usage();
 
-	if (!printusage) {
-		adapter_nr = atoi(argv[1]);
-	}
-	if (selection == 'w') {
-		if (argc < 4)
-			printusage = 1;
-		else
-			filename = argv[3];
-	} else {
-		if (argc >= 4)
-			printusage = 1;
-	}
+	adapter_nr = atoi(argv[1]);
+	device_address = atoi(argv[2]);
+	if (strlen(argv[3]) != 1)
+		usage();
+	selection = argv[3][0];
+	if (argc >= 5)
+		filename = argv[4];
 
-	if (printusage) {
-		puts("GreenPak programmer - for programming NVM of SLG46824 or SLG46826\n" \
-		"Usage: greenpakprog [ADAPTER_NR 1..8] [OPTION] <filename.hex>\n" \
-		"Where OPTION is one of:\n" \
-		"r = read\n" \
-		"e = erase\n" \
-		"w = write <filename.hex>\n" \
-		"Example: greenpakprog 3 r\n" \
-		"Example: greenpakprog 7 w MDIO-MUX-SGL46826.hex\n");
-		return 1;
-	}
-
-	i2c_file = i2c_init(adapter_nr);
+	i2c_bus = i2c_init(adapter_nr);
 
 	switch (selection) {
 	case 'r':
-		puts("Reading chip!");
-		readChip(i2c_file, NVMorEEPROM);
-		// puts("Done Reading!");
+		readChip(i2c_bus, device_address, SLG46_NVM);
+		break;
+	case 'R':
+		readChip(i2c_bus, device_address, SLG46_EEPROM);
+		break;
+	case 'x':
+		readChip(i2c_bus, device_address, SLG46_RAM);
 		break;
 	case 'e':
-		puts("Erasing Chip!");
-		if (eraseChip(i2c_file, NVMorEEPROM)) {
-			// puts("Done erasing!");
-		} else {
-			puts("Erasing did not complete correctly!");
-		}
-		delay(100);
-
-		// ping();
-
+		if (eraseChip(i2c_bus, device_address, SLG46_NVM) < 0)
+			err(EXIT_FAILURE, "Erasing did not complete correctly!");
+		break;
+	case 'E':
+		if (eraseChip(i2c_bus, device_address, SLG46_EEPROM) < 0)
+			err(EXIT_FAILURE, "Erasing did not complete correctly!");
 		break;
 	case 'w':
-		puts("Writing Chip!");
-/*		if (eraseChip(i2c_file, NVMorEEPROM)) {
-			// puts("Done erasing!");
-		} else {
-			puts("Erasing did not complete correctly!");
-		}
-*/
-		// ping();
-
-		if (writeChip(i2c_file, NVMorEEPROM, filename)) {
-			// puts("Done writing!");
-		} else {
-			puts("Writing did not complete correctly!");
-		}
-
-		// ping();
-
-		readChip(i2c_file, NVMorEEPROM);
-		// puts("Done Reading!");
+		if (writeChip(i2c_bus, device_address, SLG46_NVM, filename) < 0)
+			err(EXIT_FAILURE, "Writing did not complete correctly!");
+		break;
+	case 'W':
+		if (writeChip(i2c_bus, device_address, SLG46_EEPROM, filename) < 0)
+			err(EXIT_FAILURE, "Writing did not complete correctly!");
+		break;
+	case 'X':
+		if (writeChip(i2c_bus, device_address, SLG46_RAM, filename) < 0)
+			err(EXIT_FAILURE, "Writing did not complete correctly!");
 		break;
 	default:
 		printf("Wrong option '%c'\n", selection);
