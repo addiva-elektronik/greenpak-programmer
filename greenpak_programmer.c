@@ -1,16 +1,10 @@
 /*
 Experimental tool for programming GreenPAK NVM. Currently we can program RAM but NVM does not stick.
 
-Compiling:
- gcc -static greenpak_programmer.c -o greenpak_programmer
-i e:
- CROSS_COMPILE := ~/UGW/ugw_sw/openwrt/staging_dir/toolchain-mips_24kc+nomips16_gcc-8.3.0_musl/bin/mips-openwrt-linux-musl-
- CC	:= $(CROSS_COMPILE)gcc
-
 Addiva AB, John Eklund, 2021
+Addiva Elektronik AB, Henrik Nordström, 2023
 */
 
-// #include <Wire.h> // Arduino I2C
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -37,6 +31,8 @@ Addiva AB, John Eklund, 2021
 
 #include <assert.h>
 
+#include <i2c/smbus.h>
+
 #define NVM_CONFIG 0x02 // 010 = NVM data, se s. 12
 #define EEPROM_CONFIG 0x03 // 011, EEPROM data, se s. 12
 
@@ -49,145 +45,7 @@ Addiva AB, John Eklund, 2021
 
 https://www.dialog-semiconductor.com/sites/default/files/isp_guide_slg46824_26_rev.1.2.pdf
 
-https://www.kernel.org/doc/html/latest/i2c/dev-interface.html
-IMPORTANT: because of the use of inline functions, you have to use ‘-O’ or some variation when you compile your program!
-
-https://github.com/shenki/linux-i2c-example
-Simple I2C example
-
-https://github.com/bentiss/i2c-read-register/blob/master/i2c-read-register.c
-
-https://www.arduino.cc/en/Reference/WireSetClock
-Arduino I2C Wire reference
-
 */
-
-// static inline
-__s32 i2c_smbus_access(int file, char read_write, __u8 command, int size, union i2c_smbus_data *data)
-{
-	struct i2c_smbus_ioctl_data args;
-
-	args.read_write = read_write;
-	args.command = command;
-	args.size = size;
-	args.data = data;
-	return ioctl(file, I2C_SMBUS, &args);
-}
-
-__s32 i2c_smbus_write_quick(int file, __u8 value)
-{
-	return i2c_smbus_access(file, value, 0, I2C_SMBUS_QUICK, NULL);
-}
-
-__s32 i2c_smbus_read_byte(int file)
-{
-	union i2c_smbus_data data;
-	if (i2c_smbus_access(file, I2C_SMBUS_READ, 0, I2C_SMBUS_BYTE, &data))
-		return -1;
-	else
-		return 0x0FF & data.byte;
-}
-
-__s32 i2c_smbus_write_byte(int file, __u8 value)
-{
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, value, I2C_SMBUS_BYTE, NULL);
-}
-
-__s32 i2c_smbus_read_byte_data(int file, __u8 command)
-{
-	union i2c_smbus_data data;
-	if (i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BYTE_DATA ,&data))
-		return -1;
-	else
-		return 0x0FF & data.byte;
-}
-
-__s32 i2c_smbus_write_byte_data(int file, __u8 command, __u8 value)
-{
-	union i2c_smbus_data data;
-	data.byte = value;
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_BYTE_DATA, &data);
-}
-
-__s32 i2c_smbus_read_word_data(int file, __u8 command)
-{
-	union i2c_smbus_data data;
-	if (i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_WORD_DATA, &data))
-		return -1;
-	else
-		return 0x0FFFF & data.word;
-}
-
-__s32 i2c_smbus_write_word_data(int file, __u8 command, __u16 value)
-{
-	union i2c_smbus_data data;
-	data.word = value;
-	return i2c_smbus_access(file,I2C_SMBUS_WRITE,command, I2C_SMBUS_WORD_DATA, &data);
-}
-
-__s32 i2c_smbus_process_call(int file, __u8 command, __u16 value)
-{
-	union i2c_smbus_data data;
-	data.word = value;
-	if (i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_PROC_CALL, &data))
-		return -1;
-	else
-		return 0x0FFFF & data.word;
-}
-
-
-/* Returns the number of read bytes */
-__s32 i2c_smbus_read_block_data(int file, __u8 command, __u8 *values)
-{
-	union i2c_smbus_data data;
-	int i;
-	if (i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BLOCK_DATA, &data))
-		return -1;
-	else {
-		for (i = 1; i <= data.block[0]; i++)
-			values[i-1] = data.block[i];
-		return data.block[0];
-	}
-}
-
-__s32 i2c_smbus_write_block_data(int file, __u8 command, __u8 length, const __u8 *values)
-{
-	union i2c_smbus_data data;
-	int i;
-	if (length > 32)
-		length = 32;
-	for (i = 1; i <= length; i++)
-		data.block[i] = values[i-1];
-	data.block[0] = length;
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_BLOCK_DATA, &data);
-}
-/*
-Omskrivna. Tveksamt om dessa kan fungera då längd nu inte skickas in till ioctl (parameter 4 "size" = konstant I2C_SMBUS_BLOCK_DATA)
-__s32 i2c_smbus_read_block_data_raw(int file, __u8 command, __u8 length, __u8 *values)
-{
-	union i2c_smbus_data data;
-	int i;
-	if (i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BLOCK_DATA, &data))
-		return -1;
-	else {
-		for (i = 0; i < length; i++)
-			values[i] = data.block[i];
-		return length;
-	}
-}
-
-__s32 i2c_smbus_write_block_data_raw(int file, __u8 command, __u8 length, const __u8 *values)
-{
-	union i2c_smbus_data data;
-	int i;
-	if (length > 32)
-		length = 32;
-	for (i = 0; i < length; i++)
-		data.block[i] = values[i];
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_BLOCK_DATA, &data);
-}
-*/
-
 
 int i2c_init(int adapter_nr)
 {
@@ -202,70 +60,6 @@ int i2c_init(int adapter_nr)
 
 	printf("Opened %s device\n", path);
 	return file;
-}
-/* Note that only a subset of the I2C and SMBus protocols can be achieved by the means of
-read() and write() calls. In particular, so-called combined transactions
-(mixing read and write messages in the same transaction) aren’t supported.
-For this reason, this interface is almost never used by user-space programs.
-
-// Using I2C Write, equivalent of i2c_smbus_write_word_data(file, reg, 0x6543):
-	buf[0] = reg;
-	buf[1] = 0x43;
-	buf[2] = 0x65;
-	if (write(file, buf, 3) != 3)
-		err(errno, "I2C write failed");
-// Using I2C Read, equivalent of i2c_smbus_read_byte(file):
-	if (read(file, buf, 1) != 1)
-		err(errno, "I2C read failed");
-	else {
-		// buf[0] contains the read byte
-	}
-*/
-
-/*
-int i2c_read(int file, uint8_t reg)
-{
-	int data; // uint8_t
-	// Using SMBus commands:
-
-//	data = i2c_smbus_read_word_data(file, reg);
-	data = i2c_smbus_read_byte_data(file, reg);
-	if (data < 0)
-		err(errno, "SMBUS read failed: %d", data);
-
-	printf("i2c read register 0x%02x: 0x%02x\n", reg, data);
-	return data;
-}
-
-void i2c_write(int file, uint8_t reg, int data) // uint8_t data
-{
-	// Using SMBus commands:
-
-//	data = i2c_smbus_write_word_data(file, reg, data);
-	data = i2c_smbus_write_byte_data(file, reg, data);
-	if (data < 0)
-		err(errno, "SMBUS write failed: %d", data);
-
-	printf("i2c write register 0x%02x: 0x%02x\n", reg, data);
-}
-*/
-
-
-
-///////////////
-
-int i2c_set_registers(int file, int page_addr, char *data, size_t len)
-{
-	char buf[len + 1];
-	buf[0] = page_addr; // byte-adress 0, 16, 32 per 16-bytes-block för det hex-data som skrivs
-puts("i2c_set_registers");
-	memcpy(&buf[1], data, len);
-
-//	if (write(file, buf, len + 1) != (ssize_t)(len + 1)) {
-//		perror("I2c write:");
-//		exit(1);
-//	}
-	return 0;
 }
 
 // IN:
@@ -313,9 +107,8 @@ int load_hex(char *filename, int i2c_file, unsigned char *buf)
 		}
 	}
 	printf("load_hex total len: %d\n", index);
-	return index; // i2c_set_registers(i2c_file, 0, buf, len);
+	return index;
 }
-// i2c_set_registers(i2c_file, 0, buf, len);
 
 
 void delay (int sleeptime_msec)
@@ -361,42 +154,6 @@ void powercycle()
 //	puts("Done Power Cycling!");
 }
 
-/*
-// i2c_readbuf - test att läsa med read() till buffert. Fungerade ej korrekt.
-// Även med i2c-read-register.c (nedladdat exempel som använde read())
-void i2c_readbuf(int i2c_file)
-{
-	unsigned char buf[16];
-	buf[0]=0x11; // Specify which register to read
-#define POLL_I2C_READ
-#ifdef POLL_I2C_READ
-	struct pollfd pfd;
-	pfd.fd = i2c_file;
-	int p;
-#endif
-
-	if (write(i2c_file, buf, 1) != 1) {
-		perror("I2c write:");
-		exit(1);
-	}
-#define POLL_I2C_READ
-
-#ifdef POLL_I2C_READ
-	p = poll(&pfd, 1, 100); // 11 ms
-	if (p == 0)
-		err(errno, "Poll timeout expired\n");
-	else if (p == -1)
-		err(errno, "Poll error");
-	else {
-#endif
-		if (read(i2c_file, buf, 2) != 2)
-			err(errno, "I2C read failed");
-		//printf("%02x\n", buf[0]);
-		printf("%02x%02x\n", buf[0], buf[1]);
-	}
-}
-*/
-
 // reads either the device’s NVM data or EEPROM data using the specified device address
 int readChip(int i2c_file, unsigned short NVMorEEPROM)
 {
@@ -411,21 +168,9 @@ int readChip(int i2c_file, unsigned short NVMorEEPROM)
 	else if (NVMorEEPROM == EEPROM)
 		device_address |= EEPROM_CONFIG; // 8 | 0b011 (3) = 0xb
 
-// Sätt till 8 tillfälligt hårdkodat för att läsa RAM på chip som RAM-programmerats med bootscriptet:
-// device_address = 8;
-// device_address = 0x57; // 8 / 0xa
-
 	if (ioctl(i2c_file, I2C_SLAVE_FORCE, device_address) < 0) // I2C_SLAVE. device_address / control_code
 		err(errno, "Couldn't set device address '0x%02x'", device_address);
 	printf("set address 0x%02x\n", device_address);
-
-// GreenPak sitter på i2cbus 1-8 kanal 8-a-b
-// i2cdump -f -y 1 8
-// i2cdump -f -y 1 0xa
-// i2cdump -f -y 2 8
-// i2cdump -f -y 2 0xa
-// ...
-// I Dialogs ISP-guide för Greenpak är det adress.
 
 	for (pagenr = 0; pagenr < 16; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
 		//if (read(i2c_file, buf, 16) != 16)
@@ -434,28 +179,12 @@ int readChip(int i2c_file, unsigned short NVMorEEPROM)
 			value = i2c_smbus_read_byte_data(i2c_file, reg);
 			if (value < 0) {
 				printf(" --");
-//				err(errno, "I2C read failed");
 			} else
 				printf(" %02x", value);
 			delay(1);
-	//		Wire.beginTransmission(control_code); // 7-bit address of the device to transmit to (with write)
-	//		Wire.write(i << 4); // write=queue bytes for transmission
-				// endTransmission (false): sends a restart message after transmission. The bus will not
-				// be released, which prevents another master device from transmitting between messages.
-				// This allows one master device to send multiple transmissions while in control.
-	//		Wire.endTransmission(false); // transmit write-queued bytes
-			// requestFrom: request bytes from a device. Then retrieved with the available() and read() functions.
-			// Sends a stop message after the request, releasing the I2C bus.
-			// control_code: the 7-bit address of the device to request bytes from. 16: number of bytes to request
-	//		Wire.requestFrom(control_code, 16);
-
-	//		while (Wire.available()) { // Returns the number of bytes available for retrieval with read
-	//			printf("0x%02X", Wire.read()); // Reads a byte
-	//		}
 		}
 		putchar('\n');
 	}
-//	close(i2c_file);
 	return 1;
 }
 
@@ -468,8 +197,6 @@ int eraseChip(int i2c_file, unsigned short NVMorEEPROM)
 	// Erased chip: base address 0 (0, 1, 2, 3)
 	// Empty or programmed chip: base address 8 (8, 9, a, b)
 
-//	int control_code = device_address << 3; // Address = XXXXAAAw, se s. 9. AAA = block address (bin 010 = NVM)
-//	int addressForAckPolling = control_code;
 	unsigned int pagenr;
 	unsigned int data;
 
@@ -487,15 +214,11 @@ int eraseChip(int i2c_file, unsigned short NVMorEEPROM)
 
 	for (pagenr = 0; pagenr < 15; pagenr++) { // 0 .. 14 = cycle thru ERSEB0-3. NVM page 15 = reserved.
 		printf(" %02X", pagenr);
-//		Wire.beginTransmission(control_code); // 7-bit address of the device to transmit to (with write)
-//		Wire.write(0xE3); // write=queue bytes for transmission. write to the “Page Erase Byte”
 
 		if (NVMorEEPROM == NVM) {
 			data = 0x80 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 0 = NVM. Low nibble = page address
-//			Wire.write(0x80 | i);
 		} else {
 			data = 0x90 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 1 = EEPROM. Low nibble = page address
-//			Wire.write(0x90 | i);
 		}
 		i2c_smbus_write_byte_data(i2c_file, 0xE3, data); // 0xE3 == ERSR register
 
@@ -503,28 +226,9 @@ int eraseChip(int i2c_file, unsigned short NVMorEEPROM)
 ACK after the “Data” portion of the I2C command. This behavior might be interpreted as a NACK
 depending on the implementation of the I2C master.
 Despite the presence of a NACK, the NVM and EEPROM erase functions will execute properly.
-To accommodate for the non-I2C compliant ACK behavior of the Page Erase Byte, we've removed the
-software check for an I2C ACK and added the "Wire.endTransmission();" line to generate a stop condition.
 - Please reference "Issue 2: Non-I2C Compliant ACK Behavior for the NVM and EEPROM Page Erase Byte"
 in the SLG46824/6 (XC revision) errata document for more information. */
 
-//	if (Wire.endTransmission() == 0) { // send a stop message after transmission, releasing the I2C bus
-//		printf("ack ");
-//	}
-//	else {
-//		printf("nack ");
-//		return 0;
-//	}
-
-//		Wire.endTransmission(); // transmit write-queued bytes. Send a stop message after transmission, releasing the I2C bus
-
-/*		if (!ackPolling(addressForAckPolling)) {
-			return 0;
-		} else {
-			printf("ready ");
-			delay(100);
-		}
-*/
 		delay(100);
 	}
 	putchar('\n');
@@ -553,29 +257,18 @@ int writeChip(int i2c_file, unsigned short NVMorEEPROM, char *filename)
 		return 0;
 
 	if (NVMorEEPROM == NVM) {
-		// puts("Writing NVM");
-		// Set the device address to 0x00 since the chip has just been erased
-//		device_address = 0x00;
-		// Set the control code to 0x00 since the chip has just been erased
-		//device_address = 0x00;
 		device_address |= NVM_CONFIG; // 010, se s. 12. Base address 8 => becomes 0x0a for writing
 		addressForAckPolling = 0x00;
 	} else if (NVMorEEPROM == EEPROM) { // 011, se s. 12
-		// puts("Writing EEPROM");
-		// device_address = device_address << 3;
 		device_address |= EEPROM_CONFIG;
 		addressForAckPolling = device_address << 3;
 	} else
 		return 0;
 
-// Varje gång control_code ändras för att adressera ett annat block (se s. 12), kör ioctl
 	if (ioctl(i2c_file, I2C_SLAVE_FORCE, device_address) < 0) // I2C_SLAVE
 		err(errno, "Couldn't set device address '0x%02x'", device_address);
 	printf("set address 0x%02x\n", device_address);
 
-// printf("Control Code: 0x%02X\n", device_address);
-
-puts("load_hex");
 	length = load_hex(filename, i2c_file, filebuf);
 	if (length < 0) {
 		puts("Error: couldn't open hex file.");
@@ -584,12 +277,11 @@ puts("load_hex");
 		puts("Error: too short data (< 256) in hex file.");
 		return 0;
 	}
+
 printf("Setting filebuf[0xCA] to new device address 1 (was in file: %02x)\n", filebuf[0xCA]);
 filebuf[0xCA] = 1;
+
 	for (pagenr = 0; pagenr < 15; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
-//		i2c_write(i2c_file, 0x08, control_code);
-//		Wire.beginTransmission(control_code); // 7-bit address of the device to transmit to (with write)
-//		Wire.write(i << 4); // write=queue bytes for transmission
 		printf("Page 0x%02X:", pagenr);
 
 
@@ -603,69 +295,16 @@ filebuf[0xCA] = 1;
 		if (write(i2c_file, &(filebuf[pagenr << 4]), 16) != 16)
 			err(errno, "I2C write failed");
 
-////////
-/*
-puts("Using i2c_smbus_write_byte_data()");
-		for (byteidx = 0; byteidx < 16; byteidx++) {
-			reg = pagenr << 4 | byteidx;
-			value = filebuf[reg];
-			printf(" %02X", value);
-			if (i2c_smbus_write_byte_data(i2c_file, reg, (unsigned char) filebuf[reg]) < 0)
-//			if (i2c_smbus_write_byte(i2c_file, (unsigned char) filebuf[reg]) < 0)
-				err(errno, "SMBUS write failed [%01X]: %d", reg, value);
-
-			delay(1);
-		}
-		putchar('\n');
-*/
 		delay(100);
 	}
-//	close(i2c_file);
 	powercycle();
 	return 1;
 
-//	i2c_set_registers(i2c_file, 0, filebuf, length);
-
-// When the NVM is erased, the NVM address containing the I2C device address will be set to 0000.
-// After the erase, the chip will maintain its current device address within the configuration registers until
-// the device is reset as described above. Once the chip has been reset, the I2C device address must be
-// set in address 0xCA within the configuration registers each time the GreenPAK is power-cycled or reset.
-// This must be done until the new I2C device address page has been written in the NVM.
-//if (NVMorEEPROM == NVM) {
-//	data_array[0xC][0xA] = device_address_new; // = bits [1623:1620], se s. 10
-//}
-	/*
-	Write each byte of data_array[][] array to the chip
-	Wire.write(data_array[i][j]); // write=queue bytes for transmission
-
-	if (Wire.endTransmission() == 0) { // transmit write-queued bytes. Send a stop message after transmission, releasing the I2C bus
-		printf(" ack "); // 0 = success
-	} else {
-		puts(" nack\nOh No! Something went wrong while programming!");
-		return 0;
-	}
-
-	if (!ackPolling(addressForAckPolling)) {
-		return 0;
-	} else {
-		puts("ready\n");
-		delay(100);
-	}
-	*/
 }
 
 
 int main(int argc, char ** argv)
 {
-	// Wire.begin(); // Initiate, join i2c bus as master
-	// Wire.setClock(400000); // 400 kHz clock frequency for I2C communication
-		// 100000 =standard mode, 400000 =fast mode
-		// Some processors also support 10000 =low speed mode, 1000000 =fast mode plus & 3400000 =high speed mode
-
-//	pinMode(VDD, OUTPUT);	// This will be the GreenPAK's VDD
-//	digitalWrite(VDD, HIGH);
-//	delay(100);
-
 	int i2c_file;
 	int adapter_nr = 0;
 
