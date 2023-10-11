@@ -65,7 +65,6 @@ int i2c_init(int adapter_nr)
 	if (file < 0)
 		err(errno, "Tried to open '%s'", path);
 
-	printf("Opened %s device\n", path);
 	return file;
 }
 
@@ -103,7 +102,6 @@ int load_hex(char *filename, int i2c_bus, unsigned char *buf)
 			break;
 		assert(rectype == 0);
 		assert(index == newaddr); // Only sequential for now.
-		printf("load_hex len: %d newaddr: 0x%02X rectype: %d\n", len, newaddr, rectype);
 
 		for (int i = 0; i < len; i++) {
 			tmp[0] = *p++;
@@ -113,7 +111,6 @@ int load_hex(char *filename, int i2c_bus, unsigned char *buf)
 			buf[index++] = strtoul(tmp, NULL, 16);
 		}
 	}
-	printf("load_hex total len: %d\n", index);
 	return index;
 }
 
@@ -165,7 +162,7 @@ void powercycle()
 void select_block(int i2c_bus, uint8_t device_address, block_address block)
 {
 	if (device_address & 0x7)
-		err(EXIT_FAILURE, "Invalid device address %d (0x%02x)", device_address, device_address);
+		err(EXIT_FAILURE, "Invalid device address %d (0x%02x)\n", device_address, device_address);
 
 	device_address |= block;
 
@@ -197,13 +194,37 @@ int readChip(int i2c_bus, uint8_t device_address, block_address block)
 }
 
 
-// eraseChip - erases either the device’s NVM data or EEPROM data using the specified device address
-// Se s. 10
-int eraseChip(int i2c_bus, uint8_t device_address, block_address block)
+// Erase a single page starting at offset
+int erasePage(int i2c_bus, uint8_t device_address, block_address block, uint8_t offset)
 {
+	uint8_t page_erase_reg;
+	uint8_t pagenr = offset >> 4;
+
+	assert(pagenr << 4 == offset);
 
 	select_block(i2c_bus, device_address, SLG46_RAM);
 
+	if (block == SLG46_NVM) {
+		page_erase_reg = 0x80 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 0 = NVM. Low nibble = page address
+	} else {
+		page_erase_reg = 0x90 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 1 = EEPROM. Low nibble = page address
+	}
+	i2c_smbus_write_byte_data(i2c_bus, 0xE3, page_erase_reg); // 0xE3 == Page Erase Register
+
+/* When writing to the “Page Erase Byte” (Address: 0xE3), the SLG46824/6 produces a non-I2C compliant
+ACK after the “Data” portion of the I2C command. This behavior might be interpreted as a NACK
+depending on the implementation of the I2C master.
+Despite the presence of a NACK, the NVM and EEPROM erase functions will execute properly.
+- Please reference "Issue 2: Non-I2C Compliant ACK Behavior for the NVM and EEPROM Page Erase Byte"
+in the SLG46824/6 (XC revision) errata document for more information. */
+
+	delay(100);
+}
+
+
+// eraseChip - erases either the device’s NVM data or EEPROM data using the specified device address
+int eraseChip(int i2c_bus, uint8_t device_address, block_address block)
+{
 	switch (block) {
 	case SLG46_NVM:
 		printf("Erase NVM page:");
@@ -216,25 +237,10 @@ int eraseChip(int i2c_bus, uint8_t device_address, block_address block)
 	}
 
 	for (int pagenr = 0; pagenr < 15; pagenr++) { // 0 .. 14 = cycle thru ERSEB0-3. NVM page 15 = reserved.
-		printf(" %02X", pagenr);
+		printf(" %Xx", pagenr);
+		fflush(stdout);
 
-		uint8_t page_erase_reg;
-
-		if (block == SLG46_NVM) {
-			page_erase_reg = 0x80 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 0 = NVM. Low nibble = page address
-		} else {
-			page_erase_reg = 0x90 | pagenr; // ERSE (bit 7) = 1, ERSEB4 = 1 = EEPROM. Low nibble = page address
-		}
-		i2c_smbus_write_byte_data(i2c_bus, 0xE3, page_erase_reg); // 0xE3 == Page Erase Register
-
-/* When writing to the “Page Erase Byte” (Address: 0xE3), the SLG46824/6 produces a non-I2C compliant
-ACK after the “Data” portion of the I2C command. This behavior might be interpreted as a NACK
-depending on the implementation of the I2C master.
-Despite the presence of a NACK, the NVM and EEPROM erase functions will execute properly.
-- Please reference "Issue 2: Non-I2C Compliant ACK Behavior for the NVM and EEPROM Page Erase Byte"
-in the SLG46824/6 (XC revision) errata document for more information. */
-
-		delay(100);
+		erasePage(i2c_bus, device_address, block, pagenr * 16);
 	}
 	putchar('\n');
 
@@ -266,22 +272,31 @@ int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *fi
 	if (block != SLG46_RAM)
 		eraseChip(i2c_bus, device_address, block);
 
+	switch (block) {
+	case SLG46_NVM:
+		printf("Write NVM page:");
+		break;
+	case SLG46_EEPROM:
+		printf("Write EEPROM page:");
+		break;
+	case SLG46_RAM:
+		printf("Write RAM page:");
+		break;
+	default:
+		err(EXIT_FAILURE, "Invalid block %d\n", block);
+	}
+
 	select_block(i2c_bus, device_address, block);
 
 	for (pagenr = 0; pagenr < 15; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
-		printf("Page 0x%02X:", pagenr);
-
-		puts("Using write()");
-		for (byteidx = 0; byteidx < 16; byteidx++) {
-			value = filebuf[pagenr << 4 | byteidx];
-			printf(" %02X", value);
-		}
-		putchar('\n');
+		printf(" %Xx", pagenr);
+		fflush(stdout);
 		if (i2c_smbus_write_block_data(i2c_bus, pagenr << 4, 16, &filebuf[pagenr*16]) < 0)
 			err(errno, "I2C write failed");
 
 		delay(100);
 	}
+	printf("\n");
 	return 1;
 
 }
