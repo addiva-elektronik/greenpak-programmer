@@ -177,15 +177,22 @@ int readChip(int i2c_bus, uint8_t device_address, block_address block)
 
 	for (int pagenr = 0; pagenr < 16; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
 		uint8_t page_data[16];
+		switch(block) {
+		case SLG46_RAM:
+			printf("RAM %xx:", pagenr);
+			break;
+		case SLG46_NVM:
+			printf("NVM %xx:", pagenr);
+			break;
+		case SLG46_EEPROM:
+			printf("EEPROM %xx:", pagenr);
+			break;
+		}
 		if (i2c_smbus_read_i2c_block_data(i2c_bus, pagenr << 4, sizeof(page_data), page_data) != sizeof(page_data))
 			err(EXIT_FAILURE, "Failed to read chip data");
 		for (int byteidx = 0; byteidx < 16; byteidx++) {
 			int value = page_data[byteidx];
-			if (value < 0) {
-				printf(" --");
-			} else
-				printf(" %02x", value);
-			delay(1);
+			printf(" %02x", value);
 		}
 		putchar('\n');
 	}
