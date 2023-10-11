@@ -291,10 +291,11 @@ int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *fi
 	for (pagenr = 0; pagenr < 15; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
 		printf(" %Xx", pagenr);
 		fflush(stdout);
-		if (i2c_smbus_write_block_data(i2c_bus, pagenr << 4, 16, &filebuf[pagenr*16]) < 0)
+		if (i2c_smbus_write_i2c_block_data(i2c_bus, pagenr << 4, 16, &filebuf[pagenr*16]) < 0)
 			err(errno, "I2C write failed");
 
-		delay(100);
+		if (block != SLG46_RAM)
+			delay(100);
 	}
 	printf("\n");
 	return 1;
