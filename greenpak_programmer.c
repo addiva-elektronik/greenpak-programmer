@@ -173,15 +173,14 @@ void select_block(int i2c_bus, uint8_t device_address, block_address block)
 // reads either the device’s NVM data or EEPROM data using the specified device address
 int readChip(int i2c_bus, uint8_t device_address, block_address block)
 {
-	int pagenr, byteidx, reg;
-	int value;
-
 	select_block(i2c_bus, device_address, block);
 
-	for (pagenr = 0; pagenr < 16; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
-		for (byteidx = 0; byteidx < 16; byteidx++) {
-			reg = pagenr << 4 | byteidx;
-			value = i2c_smbus_read_byte_data(i2c_bus, reg);
+	for (int pagenr = 0; pagenr < 16; pagenr++) { // 16 pages of 16 bytes in every page = reg 0..255
+		uint8_t page_data[16];
+		if (i2c_smbus_read_i2c_block_data(i2c_bus, pagenr << 4, sizeof(page_data), page_data) != sizeof(page_data))
+			err(EXIT_FAILURE, "Failed to read chip data");
+		for (int byteidx = 0; byteidx < 16; byteidx++) {
+			int value = page_data[byteidx];
 			if (value < 0) {
 				printf(" --");
 			} else
