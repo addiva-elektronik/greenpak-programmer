@@ -242,6 +242,28 @@ int eraseChip(int i2c_bus, uint8_t device_address, block_address block)
 	return 0;
 }
 
+int resetChip(int i2c_bus, uint8_t device_address)
+{
+	int reset_bit = 1601;
+	uint8_t reg = reset_bit / 8;
+	uint8_t mask = 1 << (reset_bit % 8);
+
+	printf("Resetting chip");
+	fflush(stdout);
+	select_block(i2c_bus, device_address, SLG46_RAM);
+
+	int value = i2c_smbus_read_byte_data(i2c_bus, reg);
+	if (value < 0)
+		err(EXIT_FAILURE, "Failed to read reset register");
+	value |= mask;
+	if (i2c_smbus_write_byte_data(i2c_bus, reg, value) < 0)
+		err(EXIT_FAILURE, "Failed to write reset register");
+
+	printf("\n");
+
+	return 0;
+}
+
 // writeChip - Erases and then writes either the device’s NVM data or EEPROM data using the specified device address.
 int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *filename)
 {
@@ -293,12 +315,7 @@ int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *fi
 			delay(100);
 	}
 	printf("\n");
-	return 0;
 
-}
-
-int resetChip(int i2c_bus, uint8_t device_address)
-{
 	return 0;
 }
 
@@ -417,6 +434,8 @@ int main(int argc, char ** argv)
 	case MODE_WRITE:
 		if (writeChip(i2c_bus, device_address, target, filename) < 0)
 			err(EXIT_FAILURE, "Writing did not complete correctly!");
+		if (target == SLG46_NVM && !do_reset)
+			fprintf(stderr, "Notice: Chip needs reset to activate new config\n");
 		break;
 	case MODE_ERASE:
 		if (eraseChip(i2c_bus, device_address, target) < 0)
