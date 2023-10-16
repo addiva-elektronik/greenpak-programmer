@@ -77,7 +77,7 @@ int i2c_init(int adapter_nr)
 // IN:
 // buf[256]
 // OUT: length of data read or -1: Error opening file
-int load_hex(char *filename, int i2c_bus, unsigned char *buf)
+int load_hex(char *filename, unsigned char *buf)
 {
 	char line[256];
 	char tmp[5];
@@ -127,25 +127,6 @@ void delay (int sleeptime_msec)
 	sleeptime.tv_sec = 0;
 	sleeptime.tv_nsec = sleeptime_msec * 1000000; // nanoseconds from milliseconds
 	nanosleep(&sleeptime, NULL);
-}
-
-
-int ackPolling(int addressForAckPolling)
-{
-	int nack_count = 0;
-	while (1) {
-//		Wire.beginTransmission(addressForAckPolling); // 7-bit address of the device to transmit to (with write)
-//		if (Wire.endTransmission() == 0) { // transmit write-queued bytes. Send a stop message after transmission, releasing the I2C bus
-//			return 1;
-//		}
-		if (nack_count >= 1000)
-		{
-			puts("Geez! Something went wrong while programming!");
-			return 0;
-		}
-		nack_count++;
-		delay(1);
-	}
 }
 
 void select_block(int i2c_bus, uint8_t device_address, block_address block)
@@ -214,6 +195,8 @@ Despite the presence of a NACK, the NVM and EEPROM erase functions will execute 
 in the SLG46824/6 (XC revision) errata document for more information. */
 
 	delay(100);
+
+	return 0;
 }
 
 
@@ -268,16 +251,13 @@ int resetChip(int i2c_bus, uint8_t device_address)
 int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *filename)
 {
 	int pagenr;
-	int byteidx;
-	int reg;
 	unsigned char filebuf[256];
 	int length;
-	unsigned char value;
 
 	if (!filename)
 		err(EXIT_FAILURE, "No filename given");
 
-	length = load_hex(filename, i2c_bus, filebuf);
+	length = load_hex(filename, filebuf);
 	if (length < 0) {
 		puts("Error: couldn't open hex file.");
 		return -1;
@@ -340,7 +320,6 @@ int main(int argc, char ** argv)
 	int i2c_bus;
 	int adapter_nr = DEFAULT_I2C_BUS;
 	int device_address = DEFAULT_I2C_ADDRESS;
-	char selection = ' ';
 	char * filename = NULL;
 	block_address target = SLG46_NVM;
 	enum {
@@ -394,6 +373,8 @@ int main(int argc, char ** argv)
 			break;
 		case 'R':
 			do_reset = true;
+			if (mode == MODE_NONE)
+				mode = MODE_RESET;
 			break;
 		case 'x':
 			target = SLG46_RAM;
@@ -426,6 +407,7 @@ int main(int argc, char ** argv)
 	i2c_bus = i2c_init(adapter_nr);
 
 	switch (mode) {
+	case MODE_RESET:
 	case MODE_NONE:
 		break;
 	case MODE_READ:
