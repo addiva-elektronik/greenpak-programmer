@@ -1,9 +1,12 @@
-/*
-Experimental tool for programming GreenPAK NVM. Currently we can program RAM but NVM does not stick.
-
-Addiva AB, John Eklund, 2021
-Addiva Elektronik AB, Henrik Nordström, 2023
-*/
+/* SPDX-License-Identifier: MIT
+ * Copyright (C) 2021, 2023 Addiva Elektronik AB
+ *
+ * Tool for programming GreenPAK 46xxx chips using I2C.
+ *
+ * Authors:
+ * 	John Eklund, Addiva AB
+ * 	Henrik Nordström, Addiva Elektronik AB
+ */
 
 #include <stdio.h>
 #include <stdint.h>
