@@ -33,14 +33,17 @@ Addiva Elektronik AB, Henrik Nordström, 2023
 
 #include <i2c/smbus.h>
 
-#define NVM_CONFIG 0x02 // 010 = NVM data, se s. 12
-#define EEPROM_CONFIG 0x03 // 011, EEPROM data, se s. 12
+#include <getopt.h>
 
-#define VDD 2 // Arduino Digital Pin 2
+#ifndef DEFAULT_I2C_BUS
+#define DEFAULT_I2C_BUS 2
+#endif
+#ifndef DEFAULT_I2C_ADDRESS
+#define DEFAULT_I2C_ADDRESS 8
+#endif
 
-#define NVM 0
-#define EEPROM 1
-
+#define _str(_x) ""#_x
+#define _(_x) _str(_x)
 
 typedef enum {
 	SLG46_RAM = 1,
@@ -142,23 +145,6 @@ int ackPolling(int addressForAckPolling)
 	}
 }
 
-// TODO:
-// The transfer must be initiated manually by cycling the PAK VDD or by
-// generating a soft reset using I2C. By setting register <1601> in address 0xC8,
-// the device re-enables the Power-On Reset (POR) sequence and reloads the
-// register data from the NVM into the registers.
-// The functionality of the device is based upon the registers. The registers will not
-// be reloaded from the NVM until power is cycled or a reset command is issued.
-void powercycle()
-{
-	puts("Please power cycle!");
-//	digitalWrite(VDD, LOW);
-//	delay(500);
-//	digitalWrite(VDD, HIGH);
-//	puts("Done Power Cycling!");
-}
-
-
 void select_block(int i2c_bus, uint8_t device_address, block_address block)
 {
 	if (device_address & 0x7)
@@ -196,7 +182,7 @@ int readChip(int i2c_bus, uint8_t device_address, block_address block)
 		}
 		putchar('\n');
 	}
-	return 1;
+	return 0;
 }
 
 
@@ -269,10 +255,10 @@ int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *fi
 	length = load_hex(filename, i2c_bus, filebuf);
 	if (length < 0) {
 		puts("Error: couldn't open hex file.");
-		return 0;
+		return -1;
 	} else if (length < 256) {
 		puts("Error: too short data (< 256) in hex file.");
-		return 0;
+		return -1;
 	}
 
 	if (block != SLG46_RAM)
@@ -304,80 +290,139 @@ int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *fi
 			delay(100);
 	}
 	printf("\n");
-	return 1;
+	return 0;
 
+}
+
+int resetChip(int i2c_bus, uint8_t device_address)
+{
+	return 0;
 }
 
 void usage(void) {
 	puts("GreenPak programmer - for programming NVM of SLG46824 or SLG46826\n" \
-	"Usage: greenpakprog [ADAPTER_NR 1..8] [DEVICE_ADDRESS] [OPTION] <filename.hex>\n" \
-	"Where OPTION is one of:\n" \
-	"r = read NVM\n" \
-	"e = erase NVM\n" \
-	"w = write <filename.hex> to NVRAM\n" \
-	"R = read EEPROM\n" \
-	"W = write <filename.hex> to EEPROM\n" \
-	"E = erase EEPROM\n" \
-	"x = read RAM\n" \
-	"X = write <filename.hex> to RAM\n" \
-	"Example: greenpakprog 3 8 r\n" \
-	"Example: greenpakprog 3 8 w SGL46826.hex\n");
+	"Usage: greenpakprog [OPTION] [<filename.hex>]\n" \
+	" -i --bus <number>     I2C Bus number or device (default " _(DEFAULT_I2C_BUS) ")\n"
+	" -u --device <number>  Device base address on the bus (default " _(DEFAULT_I2C_ADDRESS) ")\n"
+	" -w --write <file>     Write contents of file to device\n"
+	" -e --erase            Erase chip without writing a file\n"
+	" -r --read             Read chip content\n"
+	" -x --ram              Operate on RAM / emulation\n"
+	" -n --nvm              Operate on NVM (default)\n"
+	" -N --eeprom           Operate on EEPROM\n"
+	"Default with only filename specified is write NVM with reset\n"
+	);
 	exit(1);
 }
 
 int main(int argc, char ** argv)
 {
 	int i2c_bus;
-	int adapter_nr;
-	int device_address;
+	int adapter_nr = DEFAULT_I2C_BUS;
+	int device_address = DEFAULT_I2C_ADDRESS;
 	char selection = ' ';
 	char * filename = NULL;
+	block_address target = SLG46_NVM;
+	enum {
+		MODE_NONE, 
+		MODE_READ,
+		MODE_WRITE,
+		MODE_ERASE,
+		MODE_RESET,
+	} mode = MODE_NONE;
+	bool do_reset = false;
 
-	if (argc < 4)
+	while (1) {
+		int c;
+		static const struct option long_options[] = {
+			{"help", no_argument, NULL, 'h'},
+			{"bus", required_argument, NULL, 'i'},
+			{"device", required_argument, NULL, 'u'},
+			{"write", required_argument, NULL, 'w'},
+			{"erase", no_argument, NULL, 'e'},
+			{"read", no_argument, NULL, 'r'},
+			{"reset", no_argument, NULL, 'R'},
+			{"ram", no_argument, NULL, 'x'},
+			{"nvm", no_argument, NULL, 'n'},
+			{"eeprom", no_argument, NULL, 'N'},
+			{0, 0, 0, 0 },
+		};
+
+		c = getopt_long(argc, argv, "hi:u:w:erRxnN", long_options, NULL);
+		if (c < 0)
+			break;
+
+		switch(c) {
+		case 'h':
+			usage();
+			break;
+		case 'i':
+			adapter_nr = atoi(optarg);
+			break;
+		case 'u':
+			device_address = atoi(optarg);
+			break;
+		case 'w':
+			mode = MODE_WRITE;
+			filename = optarg;
+			break;
+		case 'e':
+			mode = MODE_ERASE;
+			break;
+		case 'r':
+			mode = MODE_READ;
+			break;
+		case 'R':
+			do_reset = true;
+			break;
+		case 'x':
+			target = SLG46_RAM;
+			break;
+		case 'n':
+			target = SLG46_NVM;
+			break;
+		case 'N':
+			target = SLG46_EEPROM;
+			break;
+		default:
+			err(EXIT_FAILURE, "Unknown option '%c'", c);
+			break;
+		}
+	}
+
+	if (mode == MODE_NONE && optind < argc) {
+		mode = MODE_WRITE;
+		if (target == SLG46_NVM)
+			do_reset = true;
+		filename = argv[optind++];
+	}
+
+	if (optind < argc)
 		usage();
 
-	adapter_nr = atoi(argv[1]);
-	device_address = atoi(argv[2]);
-	if (strlen(argv[3]) != 1)
+	if (mode == MODE_NONE && !do_reset)
 		usage();
-	selection = argv[3][0];
-	if (argc >= 5)
-		filename = argv[4];
 
 	i2c_bus = i2c_init(adapter_nr);
 
-	switch (selection) {
-	case 'r':
-		readChip(i2c_bus, device_address, SLG46_NVM);
+	switch (mode) {
+	case MODE_NONE:
 		break;
-	case 'R':
-		readChip(i2c_bus, device_address, SLG46_EEPROM);
+	case MODE_READ:
+		readChip(i2c_bus, device_address, target);
 		break;
-	case 'x':
-		readChip(i2c_bus, device_address, SLG46_RAM);
+	case MODE_WRITE:
+		if (writeChip(i2c_bus, device_address, target, filename) < 0)
+			err(EXIT_FAILURE, "Writing did not complete correctly!");
 		break;
-	case 'e':
-		if (eraseChip(i2c_bus, device_address, SLG46_NVM) < 0)
+	case MODE_ERASE:
+		if (eraseChip(i2c_bus, device_address, target) < 0)
 			err(EXIT_FAILURE, "Erasing did not complete correctly!");
 		break;
-	case 'E':
-		if (eraseChip(i2c_bus, device_address, SLG46_EEPROM) < 0)
-			err(EXIT_FAILURE, "Erasing did not complete correctly!");
-		break;
-	case 'w':
-		if (writeChip(i2c_bus, device_address, SLG46_NVM, filename) < 0)
-			err(EXIT_FAILURE, "Writing did not complete correctly!");
-		break;
-	case 'W':
-		if (writeChip(i2c_bus, device_address, SLG46_EEPROM, filename) < 0)
-			err(EXIT_FAILURE, "Writing did not complete correctly!");
-		break;
-	case 'X':
-		if (writeChip(i2c_bus, device_address, SLG46_RAM, filename) < 0)
-			err(EXIT_FAILURE, "Writing did not complete correctly!");
-		break;
-	default:
-		printf("Wrong option '%c'\n", selection);
-		break;
+	}
+
+	if (do_reset) {
+		if (resetChip(i2c_bus, device_address) < 0)
+			err(EXIT_FAILURE, "Could not reset chip");
 	}
 }
