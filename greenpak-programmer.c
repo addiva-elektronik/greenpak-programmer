@@ -304,7 +304,7 @@ int resetChip(int i2c_bus, uint8_t device_address)
 
 void usage(void) {
 	puts("GreenPak programmer - for programming NVM of SLG46824 or SLG46826\n" \
-	"Usage: greenpak_programmer [OPTION] [<filename.hex>]\n" \
+	"Usage: greenpak-programmer [OPTION] [<filename.hex>]\n" \
 	" -i --bus <number>     I2C Bus number or device (default " _(DEFAULT_I2C_BUS) ")\n"
 	" -u --device <number>  Device base address on the bus (default " _(DEFAULT_I2C_ADDRESS) ")\n"
 	" -w --write <file>     Write contents of file to device\n"
