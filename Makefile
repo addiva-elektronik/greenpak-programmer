@@ -1,16 +1,16 @@
-all: greenpak_programmer
+all: greenpak-programmer
 
 LDLIBS = -li2c
 CFLAGS = -Og -g
 
-greenpak_programmer: greenpak_programmer.c
+greenpak-programmer: greenpak-programmer.c
 	$(CROSS_COMPILE)$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 
 clean:
-	rm -f greenpak_programmer *.o *~ *.bak
+	rm -f greenpak-programmer *.o *~ *.bak
 
-install: greenpak_programmer
+install: greenpak-programmer
 	install -d $(DESTDIR)/bin
-	install greenpak_programmer $(DESTDIR)/bin/greenpak_programmer
+	install greenpak-programmer $(DESTDIR)/bin/greenpak-programmer
 
