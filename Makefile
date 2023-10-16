@@ -1,7 +1,7 @@
 all: greenpak-programmer
 
 PACKAGE = greenpak-programmer
-VERSION = 1.0
+VERSION = 1.1
 
 LDLIBS = -li2c
 CFLAGS = -Og -g
