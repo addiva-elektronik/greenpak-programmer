@@ -310,6 +310,7 @@ void usage(void) {
 	" -x --ram              Operate on RAM / emulation\n"
 	" -n --nvm              Operate on NVM (default)\n"
 	" -N --eeprom           Operate on EEPROM\n"
+	" -R --reset            Rese the chip\n"
 	"Default with only filename specified is write NVM with reset\n"
 	);
 	exit(1);
