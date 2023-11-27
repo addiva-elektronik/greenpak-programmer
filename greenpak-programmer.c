@@ -291,8 +291,14 @@ int writeChip(int i2c_bus, uint8_t device_address, block_address block, char *fi
 		if (i2c_smbus_write_i2c_block_data(i2c_bus, pagenr << 4, 16, &filebuf[pagenr*16]) < 0)
 			err(errno, "I2C write failed");
 
-		if (block != SLG46_RAM)
+		if (block != SLG46_RAM) {
+			uint8_t page_data[16];
 			delay(100);
+			if (i2c_smbus_read_i2c_block_data(i2c_bus, pagenr << 4, sizeof(page_data), page_data) != sizeof(page_data))
+				err(EXIT_FAILURE, "Failed to read chip data");
+			if (memcmp(page_data, &filebuf[pagenr*16], 16) != 0)
+				err(EXIT_FAILURE, "Programmed data mismatch. Chip not properly programmed!");
+		}
 	}
 	printf("\n");
 
